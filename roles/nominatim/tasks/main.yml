@@ -1,0 +1,101 @@
+
+- name: update apt repositories cache
+  apt: update_cache=yes cache_valid_time=14400
+ 
+- name: install application requirements
+  apt: pkg={{item}} state=installed
+  with_items:
+    - build-essential
+    - libxml2-dev 
+    - libgeos-dev 
+    - libpq-dev 
+    - libbz2-dev 
+    - libtool 
+    - automake 
+    - libproj-dev
+    - libboost-dev 
+    - libboost-system-dev 
+    - libboost-filesystem-dev 
+    - libboost-thread-dev
+    - gcc 
+    - proj-bin 
+    - libgeos-c1 
+    - osmosis 
+    - libgeos++-dev
+    - nginx 
+    - php5-fpm
+    - php5
+    - php-pear 
+    - php5-pgsql 
+    - php5-json 
+    - php-db
+    - postgresql 
+    - postgis 
+    - postgresql-contrib 
+    - postgresql-9.4-postgis-2.1 
+    - postgresql-server-dev-9.4
+    - libprotobuf-c0-dev 
+    - protobuf-c-compiler
+    - git
+    - autoconf-archive
+    - make
+    - python-psycopg2
+
+- template: src=etc/postgresql/9.4/main/postgresql.conf dest=/etc/postgresql/9.4/main/postgresql.conf owner=postgres mode=644
+  register: postgresql_conf
+- service: name=postgresql.service state=restarted
+  when: postgresql_conf.changed
+
+- template: src=etc/fpm/pool.d/www.conf dest=/etc/php5/fpm/pool.d/www.conf  owner=root mode=644
+  register: fpm_conf
+- service: name=fpm.service state=restarted
+  when: fpm_conf.changed
+
+- name: download nominatim
+  get_url: url=http://www.nominatim.org/release/Nominatim-2.4.0.tar.bz2 dest=/opt/Nominatim-2.4.0.tar.bz2 mode=0440
+  
+- unarchive: src=/opt/Nominatim-2.4.0.tar.bz2 dest=/opt/ copy=no
+  args:
+    creates: /opt/Nominatim-2.4.0/INSTALL
+    
+- name: download wikipedia datas
+  get_url: url=http://www.nominatim.org/data/{{ item }} dest=/opt/Nominatim-2.4.0/data/{{ item }} mode=644
+  with_items:
+    - wikipedia_article.sql.bin
+    - wikipedia_redirect.sql.bin
+
+- shell: ./configure >> /opt/ansible-nominatim-configure.log
+  args:
+    chdir: /opt/Nominatim-2.4.0/
+    creates: /opt/ansible-nominatim-configure.log
+
+- shell: make >> /opt/ansible-nominatim-make.log
+  args:
+    chdir: /opt/Nominatim-2.4.0/
+    creates: /opt/ansible-nominatim-make.log
+
+- template: src=opt/local.php dest=/opt/Nominatim-2.4.0/settings/ owner=root mode=644
+
+- user: name=nom comment="Nominatim" group=users shell=/bin/bash
+
+- name: postgresql user nom
+  postgresql_user: name=nom role_attr_flags=SUPERUSER state=present
+  sudo: yes
+  sudo_user: postgres
+
+- name: postgresql user www-data
+  postgresql_user: name=www-data state=present
+  sudo: yes
+  sudo_user: postgres
+  
+- file: path=/var/www/nominatim state=directory owner=nom mode=755
+
+- shell: ./utils/setup.php --create-website /var/www/nominatim  >> /home/nom/ansible-nominatim-create-website.log
+  sudo: yes
+  sudo_user: nom
+  args:
+    chdir: /opt/Nominatim-2.4.0/
+    creates: /home/nom/ansible-nominatim-create-website.log
+
+
+# now you need to import the data
